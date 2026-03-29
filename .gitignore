@@ -23,3 +23,8 @@ profile
 DerivedData/
 CodeSign.xcconfig
 /OpenEmu.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# Linux port local artifacts
+/linux/build/
+/linux/third_party/*.tar.gz
+/romstest/
