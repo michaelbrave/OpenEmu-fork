@@ -5,33 +5,36 @@ import OELinuxPort
 struct OELinuxHeadlessCLI {
     static func main() throws {
         let args = CommandLine.arguments
-        guard args.count >= 2 else {
-            fputs("usage: oe-headless <path-to-rom>\n", stderr)
+        guard args.count >= 3 else {
+            fputs("usage: oe-headless <core_path> <rom_path>\n", stderr)
             return
         }
 
-        let dbPath = FileManager.default.currentDirectoryPath + "/oelib.sqlite"
-        let db = try GRDBLibraryDatabase(path: dbPath)
-        try db.migrate()
+        let corePath = args[1]
+        let romPath = args[2]
 
-        let system = try db.addSystem(identifier: "snes", name: "Super Nintendo")
-        let game = try db.addGame(systemId: system.id ?? 0, title: URL(fileURLWithPath: args[1]).deletingPathExtension().lastPathComponent)
-        _ = try db.addROM(gameId: game.id ?? 0, path: args[1], md5: nil)
+        print("Loading core: \(corePath)")
+        let core = try CoreBridge(libraryPath: corePath)
 
-        let input = SDLInputBackend()
-        try input.start()
-        input.inject(.press("Start"))
-        let events = input.pollEvents()
-        input.stop()
+        print("Loading ROM: \(romPath)")
+        try core.loadROM(path: romPath)
 
-        let audio = SDLAudioBackend()
-        try audio.start(sampleRate: 48_000, channels: 2)
-        let silence = Array(repeating: Int16(0), count: 512)
-        silence.withUnsafeBufferPointer { audio.enqueue(samples: $0) }
-        audio.stop()
+        print("Running 60 frames...")
+        for i in 1...60 {
+            core.runFrame()
+            if i % 10 == 0 {
+                print("  frame \(i)/60")
+            }
+        }
 
-        print("db: \(dbPath)")
-        print("rom indexed: \(args[1])")
-        print("input events captured: \(events.count)")
+        let size = core.videoSize
+        print("Final frame size: \(size.width)x\(size.height)")
+        
+        let sampleRate = core.audioSampleRate
+        print("Audio sample rate: \(sampleRate)")
+        
+        var audioBuffer = Array<Int16>(repeating: 0, count: 4096)
+        let samplesRead = core.readAudio(into: &audioBuffer, maxSamples: 4096)
+        print("Read \(samplesRead) audio samples from buffer")
     }
 }

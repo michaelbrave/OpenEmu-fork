@@ -35,9 +35,9 @@ static uint32_t g_palette[256];
 
 void FCEUD_SetPalette(uint8 index, uint8 r, uint8 g, uint8 b)
 {
-    /* Store as RGBA8888 (same layout as OpenEmu macOS wrapper) */
-    g_palette[index] = ((uint32_t)r << 24) | ((uint32_t)g << 16) |
-                       ((uint32_t)b <<  8) | 0xFF;
+    /* Store as RGBA8888 for OpenGL texture upload: R=byte0, G=byte1, B=byte2, A=byte3 */
+    g_palette[index] = ((uint32_t)r << 0) | ((uint32_t)g << 8) |
+                       ((uint32_t)b << 16) | ((uint32_t)0xFF << 24);
 }
 
 void FCEUD_GetPalette(uint8 i, uint8 *r, uint8 *g, uint8 *b)

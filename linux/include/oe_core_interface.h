@@ -31,32 +31,56 @@ typedef enum {
 } OEPixelFormat;
 
 /*
- * Each core .so exports these symbols. Callers use them directly (no dlsym
- * gymnastics needed when statically linking in tests; use dlsym for runtime).
+ * OECoreInterface — Function table for interacting with an emulator core.
+ * Each core .so must export a single symbol:
+ *   const OECoreInterface *oe_get_core_interface(void);
  */
+typedef struct {
+    /* Lifecycle */
+    OECoreState * (*create)(void);
+    void          (*destroy)(OECoreState *state);
 
-/* Allocate and initialise core state. Returns NULL on failure. */
+    /* ROM Loading */
+    int           (*load_rom)(OECoreState *state, const char *path);
+
+    /* Emulation */
+    void          (*run_frame)(OECoreState *state);
+    void          (*reset)(OECoreState *state);
+
+    /* Persistence */
+    int           (*save_state)(OECoreState *state, const char *path);
+    int           (*load_state)(OECoreState *state, const char *path);
+
+    /* Input */
+    void          (*set_button)(OECoreState *state, int player, int button, int pressed);
+    void          (*set_axis)(OECoreState *state, int player, int axis, int value);
+
+    /* Video Metadata */
+    void          (*get_video_size)(OECoreState *state, int *width, int *height);
+    OEPixelFormat (*get_pixel_format)(OECoreState *state);
+    const void *  (*get_video_buffer)(OECoreState *state);
+
+    /* Audio */
+    int           (*get_audio_sample_rate)(OECoreState *state);
+    /* Returns number of samples written to buffer. Samples are interleaved S16. */
+    size_t        (*read_audio)(OECoreState *state, int16_t *buffer, size_t max_samples);
+
+} OECoreInterface;
+
+/* The single entry point exported by the core .so */
+const OECoreInterface *oe_get_core_interface(void);
+
+/*
+ * Legacy Phase 0 exports (for test_harness compatibility).
+ * These will be removed once the Swift bridge is fully operational.
+ */
 OECoreState *oe_core_create(void);
-
-/* Load ROM from file path. Returns 0 on success, non-zero on error. */
 int oe_core_load_rom(OECoreState *state, const char *path);
-
-/* Run one video frame. Video buffer is updated after this call. */
 void oe_core_run_frame(OECoreState *state);
-
-/* Return pointer to the video pixel buffer (valid until next oe_core_run_frame). */
 const void *oe_core_video_buffer(OECoreState *state);
-
-/* Return video frame dimensions. */
 void oe_core_video_size(OECoreState *state, int *width, int *height);
-
-/* Return the pixel format for this core's video buffer. */
 OEPixelFormat oe_core_pixel_format(OECoreState *state);
-
-/* Reset emulation to power-on state. */
 void oe_core_reset(OECoreState *state);
-
-/* Destroy core state and free all resources. */
 void oe_core_destroy(OECoreState *state);
 
 #ifdef __cplusplus

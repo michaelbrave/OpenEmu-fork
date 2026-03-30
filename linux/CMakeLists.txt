@@ -4,20 +4,33 @@ project(OpenEMU_Linux C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 14)
 
-# Output shared libs and executables to build/
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# Repo root (one level above this file)
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets Sql Network)
+find_package(SDL2 REQUIRED)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+
+add_library(oe_core_bridge STATIC
+    src/oe_core_bridge.cpp
+    src/oe_library_database.cpp
+    src/oe_audio_backend.cpp
+    src/oe_input_backend.cpp
+)
+target_include_directories(oe_core_bridge PUBLIC ${SDL2_INCLUDE_DIRS})
+target_link_libraries(oe_core_bridge PUBLIC Qt6::Sql Qt6::OpenGLWidgets Qt6::OpenGL ${SDL2_LIBRARIES} ${CMAKE_DL_LIBS} GL)
+
 add_subdirectory(cores/mgba)
 add_subdirectory(cores/snes9x)
 
-# FCEU depends on zlib headers/libs. Prefer system zlib, but fall back to
-# vendored zlib under linux/third_party.
 set(OE_BUILD_FCEU OFF)
 set(OE_ZLIB_INCLUDE_DIR "")
 if (EXISTS "/usr/include/zlib.h")
@@ -55,3 +68,24 @@ if (OE_BUILD_FCEU)
 endif()
 
 add_subdirectory(test)
+
+add_executable(qt_test test/qt_test.cpp)
+target_link_libraries(qt_test PRIVATE Qt6::Widgets oe_core_bridge)
+
+add_executable(db_test test/db_test.cpp)
+target_link_libraries(db_test PRIVATE Qt6::Sql oe_core_bridge)
+
+add_executable(audio_input_test test/audio_input_test.cpp)
+target_link_libraries(audio_input_test PRIVATE Qt6::Core oe_core_bridge)
+
+qt_add_executable(openemu-linux
+    src/main.cpp
+    src/oe_emulator_view.cpp
+    src/oe_game_loop.cpp
+    src/oe_library_ui.cpp
+    src/oe_cover_art.cpp
+    src/oe_games_api.cpp
+    src/oe_preferences_dialog.cpp
+    src/oe_edit_game_info_dialog.cpp
+)
+target_link_libraries(openemu-linux PRIVATE oe_core_bridge Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network)
