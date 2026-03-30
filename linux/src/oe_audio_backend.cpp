@@ -52,8 +52,19 @@ void AudioBackend::stop()
 
 void AudioBackend::enqueue(const int16_t* samples, size_t count)
 {
-    if (m_device != 0) {
-        SDL_QueueAudio(m_device, samples, count * sizeof(int16_t));
+    if (m_device == 0) return;
+
+    /*
+     * Cap the SDL audio queue at ~3 frames of audio to prevent latency buildup.
+     * SDL_QueueAudio is a push queue — if we push faster than the hardware
+     * consumes it, latency grows without bound.  3 frames gives headroom
+     * without audible lag (≈50 ms at 60 fps).
+     */
+    const Uint32 maxQueueBytes =
+        static_cast<Uint32>((m_sampleRate / 20) * m_channels * sizeof(int16_t));
+
+    if (SDL_GetQueuedAudioSize(m_device) < maxQueueBytes) {
+        SDL_QueueAudio(m_device, samples, static_cast<Uint32>(count * sizeof(int16_t)));
     }
 }
 

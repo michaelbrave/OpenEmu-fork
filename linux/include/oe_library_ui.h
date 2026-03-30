@@ -20,6 +20,7 @@
 #include "oe_emulator_view.h"
 #include "oe_game_loop.h"
 #include "oe_cover_art.h"
+#include "oe_cover_art_dialog.h"
 #include "oe_games_api.h"
 #include "oe_edit_game_info_dialog.h"
 
@@ -32,6 +33,7 @@ public:
 
     void loadSystems();
     QString currentSystemId() const;
+    void selectSystemId(const QString& systemId);
     void setLibraryDatabase(LibraryDatabase* db);
     
     std::function<void(const QString&)> onSystemSelected;

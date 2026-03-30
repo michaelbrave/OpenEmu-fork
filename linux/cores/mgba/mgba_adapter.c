@@ -49,6 +49,8 @@ enum OEGBAButton
     OEGBAButtonRight,
     OEGBAButtonA,
     OEGBAButtonB,
+    OEGBAButtonX,
+    OEGBAButtonY,
     OEGBAButtonL,
     OEGBAButtonR,
     OEGBAButtonStart,
@@ -64,6 +66,8 @@ static int gba_button_to_mgba(int button) {
         case OEGBAButtonRight:  return GBA_KEY_RIGHT;
         case OEGBAButtonA:      return GBA_KEY_A;
         case OEGBAButtonB:      return GBA_KEY_B;
+        case OEGBAButtonX:      return GBA_KEY_A;
+        case OEGBAButtonY:      return GBA_KEY_B;
         case OEGBAButtonL:      return GBA_KEY_L;
         case OEGBAButtonR:      return GBA_KEY_R;
         case OEGBAButtonStart:  return GBA_KEY_START;

@@ -1,16 +1,23 @@
 #include "oe_input_backend.h"
 #include <iostream>
+#include <cstdlib>
 
 namespace OpenEmu {
 
+static constexpr Sint16 AXIS_DEADZONE = 16000;
+static bool shouldLogInputEvents()
+{
+    static const bool enabled = std::getenv("OPENEMU_DEBUG_INPUT") != nullptr;
+    return enabled;
+}
+
 InputBackend::InputBackend()
-    : m_nextPlayer(1) // Player 0 is reserved for keyboard
+    : m_nextPlayer(1)
 {
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
         std::cerr << "SDL_InitSubSystem(GAMECONTROLLER) failed: " << SDL_GetError() << std::endl;
     }
 
-    SDL_SetHint(SDL_HINT_GAMECONTROLLERCONFIG, "1");
     SDL_GameControllerEventState(SDL_ENABLE);
 
     // Default keyboard mapping for Player 0
@@ -40,6 +47,9 @@ InputBackend::InputBackend()
     m_buttonMap[SDL_CONTROLLER_BUTTON_RIGHTSHOULDER] = 9;
     m_buttonMap[SDL_CONTROLLER_BUTTON_START]         = 10;
     m_buttonMap[SDL_CONTROLLER_BUTTON_BACK]          = 11;
+
+    m_axisMap[SDL_CONTROLLER_AXIS_LEFTX] = {2, 3}; // Left, Right
+    m_axisMap[SDL_CONTROLLER_AXIS_LEFTY] = {0, 1}; // Up, Down
 }
 
 InputBackend::~InputBackend()
@@ -66,6 +76,7 @@ void InputBackend::stop()
     }
     m_controllerMap.clear();
     m_joystickMap.clear();
+    m_axisButtonState.clear();
     m_nextPlayer = 1;
 }
 
@@ -90,7 +101,7 @@ void InputBackend::handleControllerAdded(int deviceIndex)
         return;
     }
 
-    int player = m_nextPlayer++;
+    int player = m_joystickMap.empty() ? 0 : m_nextPlayer++;
     m_joystickMap[joystickId] = player;
     m_controllerMap[joystickId] = controller;
 
@@ -107,6 +118,46 @@ void InputBackend::handleControllerRemoved(SDL_JoystickID joystickId)
         std::cout << "Controller disconnected (Player " << player << ")" << std::endl;
         m_controllerMap.erase(it);
         m_joystickMap.erase(joystickId);
+    }
+
+    for (auto itState = m_axisButtonState.begin(); itState != m_axisButtonState.end();) {
+        if (itState->first.first == joystickId) {
+            itState = m_axisButtonState.erase(itState);
+        } else {
+            ++itState;
+        }
+    }
+}
+
+void InputBackend::handleAxisMotion(SDL_JoystickID joystickId, SDL_GameControllerAxis axis, Sint16 value)
+{
+    auto playerIt = m_joystickMap.find(joystickId);
+    if (playerIt == m_joystickMap.end() || !m_callback) return;
+
+    auto axisIt = m_axisMap.find(axis);
+    if (axisIt == m_axisMap.end()) return;
+
+    const int player = playerIt->second;
+    const int negativeButton = axisIt->second.first;
+    const int positiveButton = axisIt->second.second;
+
+    const bool negativePressed = value <= -AXIS_DEADZONE;
+    const bool positivePressed = value >= AXIS_DEADZONE;
+
+    const std::pair<SDL_JoystickID, int> negativeKey{joystickId, negativeButton};
+    const std::pair<SDL_JoystickID, int> positiveKey{joystickId, positiveButton};
+
+    const bool wasNegativePressed = m_axisButtonState[negativeKey];
+    const bool wasPositivePressed = m_axisButtonState[positiveKey];
+
+    if (negativePressed != wasNegativePressed) {
+        m_axisButtonState[negativeKey] = negativePressed;
+        m_callback(player, negativeButton, negativePressed ? InputEvent::Press : InputEvent::Release);
+    }
+
+    if (positivePressed != wasPositivePressed) {
+        m_axisButtonState[positiveKey] = positivePressed;
+        m_callback(player, positiveButton, positivePressed ? InputEvent::Press : InputEvent::Release);
     }
 }
 
@@ -138,6 +189,13 @@ void InputBackend::pollEvents()
             int player = it->second;
 
             SDL_GameControllerButton button = static_cast<SDL_GameControllerButton>(event.cbutton.button);
+            if (shouldLogInputEvents()) {
+                std::cout << "SDL controller button player=" << player
+                          << " which=" << event.cbutton.which
+                          << " button=" << static_cast<int>(button)
+                          << " state=" << (event.type == SDL_CONTROLLERBUTTONDOWN ? "down" : "up")
+                          << std::endl;
+            }
             auto mapIt = m_buttonMap.find(button);
             if (mapIt != m_buttonMap.end() && m_callback) {
                 m_callback(player, mapIt->second,
@@ -145,9 +203,42 @@ void InputBackend::pollEvents()
             }
             break;
         }
+        case SDL_CONTROLLERAXISMOTION:
+            handleAxisMotion(event.caxis.which,
+                             static_cast<SDL_GameControllerAxis>(event.caxis.axis),
+                             event.caxis.value);
+            break;
         default:
             break;
         }
+    }
+}
+
+void InputBackend::getCustomMappings(int keys[OE_NUM_BUTTONS], int buttons[OE_NUM_BUTTONS]) const
+{
+    for (int i = 0; i < OE_NUM_BUTTONS; i++) {
+        keys[i]    = -1;
+        buttons[i] = -1;
+    }
+    for (const auto& pair : m_keyMap) {
+        int btn = pair.second;
+        if (btn >= 0 && btn < OE_NUM_BUTTONS) keys[btn] = static_cast<int>(pair.first);
+    }
+    for (const auto& pair : m_buttonMap) {
+        int btn = pair.second;
+        if (btn >= 0 && btn < OE_NUM_BUTTONS) buttons[btn] = static_cast<int>(pair.first);
+    }
+}
+
+void InputBackend::setCustomMappings(const int keys[OE_NUM_BUTTONS], const int buttons[OE_NUM_BUTTONS])
+{
+    m_keyMap.clear();
+    m_buttonMap.clear();
+    for (int i = 0; i < OE_NUM_BUTTONS; i++) {
+        if (keys[i] != -1)
+            m_keyMap[static_cast<SDL_Keycode>(keys[i])] = i;
+        if (buttons[i] != -1)
+            m_buttonMap[static_cast<SDL_GameControllerButton>(buttons[i])] = i;
     }
 }
 

@@ -1,4 +1,5 @@
 #include "oe_preferences_dialog.h"
+#include "oe_controller_mapping_dialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -27,8 +28,8 @@ PreferencesDialog::PreferencesDialog(QWidget* parent)
     , m_shaderEdit(new QLineEdit(this))
     , m_browseShaderBtn(new QPushButton("Browse...", this))
     , m_vsyncCheck(new QCheckBox("Enable V-Sync", this))
-    , m_controllerList(new QListWidget(this))
-    , m_controllerCombo(new QComboBox(this))
+    , m_mappingSummaryLabel(new QLabel(this))
+    , m_configureMappingBtn(new QPushButton(QStringLiteral("Configure Button Mapping..."), this))
 {
     setWindowTitle("Preferences");
     setMinimumSize(500, 450);
@@ -186,53 +187,44 @@ void PreferencesDialog::setupInputTab()
 {
     QWidget* tab = new QWidget;
     QVBoxLayout* layout = new QVBoxLayout(tab);
-    
-    QGroupBox* controllerBox = new QGroupBox("Game Controller");
-    QFormLayout* controllerLayout = new QFormLayout(controllerBox);
-    
-    m_controllerCombo->addItem("Auto-detect");
-    m_controllerCombo->addItem("Keyboard Only");
-    m_controllerCombo->addItem("Xbox Controller");
-    m_controllerCombo->addItem("PlayStation Controller");
-    m_controllerCombo->addItem("Generic Gamepad");
-    controllerLayout->addRow("Controller Type:", m_controllerCombo);
-    
-    layout->addWidget(controllerBox);
-    
+
     QGroupBox* mappingBox = new QGroupBox("Button Mapping");
     QVBoxLayout* mappingLayout = new QVBoxLayout(mappingBox);
-    
-    QStringList defaultMappings = {
-        "D-Pad Up    : Keyboard Up / Axis Left Y-",
-        "D-Pad Down  : Keyboard Down / Axis Left Y+",
-        "D-Pad Left  : Keyboard Left / Axis Left X-",
-        "D-Pad Right : Keyboard Right / Axis Left X+",
-        "A / B       : Keyboard Z / Keyboard X",
-        "Start       : Keyboard Enter",
-        "Select      : Keyboard Backspace",
-        "L Shoulder  : Keyboard Q",
-        "R Shoulder  : Keyboard W",
-    };
-    
-    m_controllerList->addItems(defaultMappings);
-    mappingLayout->addWidget(m_controllerList);
-    
-    QHBoxLayout* mappingButtons = new QHBoxLayout;
-    QPushButton* defaultsBtn = new QPushButton("Reset to Defaults", this);
-    QPushButton* calibrateBtn = new QPushButton("Calibrate...", this);
-    mappingButtons->addWidget(defaultsBtn);
-    mappingButtons->addWidget(calibrateBtn);
-    mappingButtons->addStretch();
-    mappingLayout->addLayout(mappingButtons);
-    
+
+    m_mappingSummaryLabel->setWordWrap(true);
+    m_mappingSummaryLabel->setText(
+        "Keyboard defaults: Arrow keys (D-pad), Z/X (A/B), A/S (X/Y), "
+        "D/F (L/R), Enter (Start), Space (Select).\n"
+        "Controller: SDL2 GameController API with standard layout.\n"
+        "Changes take effect the next time a game is launched.");
+    m_mappingSummaryLabel->setStyleSheet("color: gray;");
+    mappingLayout->addWidget(m_mappingSummaryLabel);
+
+    QHBoxLayout* btnRow = new QHBoxLayout;
+    btnRow->addWidget(m_configureMappingBtn);
+    btnRow->addStretch();
+    mappingLayout->addLayout(btnRow);
+
     layout->addWidget(mappingBox);
-    
-    QLabel* hintLabel = new QLabel("Tip: Press a key or button while hovering over a mapping to change it.");
-    hintLabel->setStyleSheet("color: gray; font-style: italic;");
-    layout->addWidget(hintLabel);
-    
+
+    QGroupBox* axisBox = new QGroupBox("Analog Stick");
+    QVBoxLayout* axisLayout = new QVBoxLayout(axisBox);
+    QLabel* axisInfo = new QLabel(
+        "Left stick X-axis → Left/Right (D-pad)\n"
+        "Left stick Y-axis → Up/Down (D-pad)\n"
+        "Deadzone: 50 % (fixed)", axisBox);
+    axisInfo->setStyleSheet("color: gray;");
+    axisLayout->addWidget(axisInfo);
+    layout->addWidget(axisBox);
+
     layout->addStretch();
-    
+
+    connect(m_configureMappingBtn, &QPushButton::clicked, this, [this]() {
+        ControllerMappingDialog dlg(this);
+        dlg.exec();
+        /* If accepted, settings were already saved inside the dialog. */
+    });
+
     m_tabs->addTab(tab, "Input");
 }
 

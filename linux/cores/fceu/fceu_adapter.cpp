@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <cstdlib>
 
 /* FCEUX exposes the raw indexed video buffer via this extern */
 extern uint8 *XBuf;
@@ -53,6 +54,10 @@ enum OENESButton
     OENESButtonRight,
     OENESButtonA,
     OENESButtonB,
+    OENESButtonX,
+    OENESButtonY,
+    OENESButtonL,
+    OENESButtonR,
     OENESButtonStart,
     OENESButtonSelect,
     OENESButtonCount
@@ -113,6 +118,8 @@ static int fceu_load_rom(OECoreState *state, const char *path)
        FCEUI_SetSoundVolume(100);
     */
     FCEUI_Sound(48000);
+    FCEUI_SetSoundQuality(1);
+    FCEUI_SetSoundVolume(100); /* 150 caused int32→int16 overflow/distortion */
 
     /* Set base directory for saves in /tmp */
     FCEUI_SetBaseDirectory("/tmp/openemu_fceu");
@@ -132,6 +139,7 @@ static int fceu_load_rom(OECoreState *state, const char *path)
 
 static void fceu_run_frame(OECoreState *state)
 {
+    static int debugFrames = 0;
     uint8 *xbuf = NULL;
     int32_t *sound = NULL;
     int32_t sound_size = 0;
@@ -148,13 +156,27 @@ static void fceu_run_frame(OECoreState *state)
         }
     }
 
-    /* Buffer audio samples (FCEUX provides stereo int32_t samples) */
+    /*
+     * FCEUX returns mono int32_t samples in signed 16-bit range at volume=100.
+     * Clamp before casting so any future volume bumps don't wrap into distortion.
+     * Duplicate each mono sample for both L and R channels (stereo interleaved).
+     */
     if (sound && sound_size > 0) {
-        for (int i = 0; i < sound_size * 2; i++) {
-            if (state->sound_count < SIZESOUNDBUFFER) {
-                state->sound_buffer[state->sound_head] = (int16_t)sound[i];
-                state->sound_head = (state->sound_head + 1) % SIZESOUNDBUFFER;
-                state->sound_count++;
+        if (std::getenv("OPENEMU_DEBUG_AUDIO") && debugFrames < 10) {
+            fprintf(stderr, "[fceu-audio] sound_size=%d first=%d\n", sound_size, (int)sound[0]);
+            debugFrames++;
+        }
+        for (int i = 0; i < sound_size; i++) {
+            int32_t raw = sound[i];
+            if (raw >  32767) raw =  32767;
+            if (raw < -32768) raw = -32768;
+            int16_t sample = (int16_t)raw;
+            for (int channel = 0; channel < 2; ++channel) {
+                if (state->sound_count < SIZESOUNDBUFFER) {
+                    state->sound_buffer[state->sound_head] = sample;
+                    state->sound_head = (state->sound_head + 1) % SIZESOUNDBUFFER;
+                    state->sound_count++;
+                }
             }
         }
     }

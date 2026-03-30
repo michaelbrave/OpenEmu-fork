@@ -42,10 +42,11 @@ void FCEUD_SetPalette(uint8 index, uint8 r, uint8 g, uint8 b)
 
 void FCEUD_GetPalette(uint8 i, uint8 *r, uint8 *g, uint8 *b)
 {
+    /* g_palette is stored as R=byte0, G=byte1, B=byte2, A=byte3 (RGBA8888) */
     uint32_t c = g_palette[i];
-    *r = (c >> 24) & 0xFF;
-    *g = (c >> 16) & 0xFF;
-    *b = (c >>  8) & 0xFF;
+    *r = (c >>  0) & 0xFF;
+    *g = (c >>  8) & 0xFF;
+    *b = (c >> 16) & 0xFF;
 }
 
 uint32_t *fceu_get_palette(void)

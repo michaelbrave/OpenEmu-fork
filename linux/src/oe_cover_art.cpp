@@ -93,6 +93,27 @@ void CoverArtDownloader::setCacheDirectory(const QString& path)
     QDir().mkpath(m_cacheDir);
 }
 
+QString CoverArtDownloader::cacheFilePath(const QString& gameTitle, const QString& systemId) const
+{
+    QString combined = systemId + ":" + gameTitle;
+    QString key = QCryptographicHash::hash(combined.toUtf8(), QCryptographicHash::Md5).toHex();
+    return m_cacheDir + "/" + key + ".png";
+}
+
+bool CoverArtDownloader::saveCover(const QString& gameTitle, const QString& systemId, const QPixmap& pixmap)
+{
+    if (pixmap.isNull()) return false;
+
+    QString key = cacheKey(gameTitle, systemId);
+    QString filename = cacheFilePath(gameTitle, systemId);
+    if (!pixmap.save(filename)) {
+        return false;
+    }
+
+    m_cache[key] = pixmap;
+    return true;
+}
+
 QString CoverArtDownloader::cacheKey(const QString& gameTitle, const QString& systemId)
 {
     QString combined = systemId + ":" + gameTitle;
@@ -114,7 +135,7 @@ QPixmap CoverArtDownloader::getCachedCover(const QString& gameTitle, const QStri
         return m_cache[key];
     }
     
-    QString filename = m_cacheDir + "/" + key + ".png";
+    QString filename = cacheFilePath(gameTitle, systemId);
     if (QFile::exists(filename)) {
         QPixmap pixmap(filename);
         if (!pixmap.isNull()) {
@@ -152,10 +173,7 @@ void CoverArtDownloader::fetchCover(const QString& gameTitle, const QString& sys
             if (info.id > 0 && !info.boxArtUrl.isEmpty()) {
                 m_gamesApi->fetchBoxArt(info.boxArtUrl, gameTitle, [this, gameTitle, systemId, callback](const QPixmap& cover) {
                     if (!cover.isNull()) {
-                        QString key = cacheKey(gameTitle, systemId);
-                        QString filename = m_cacheDir + "/" + key + ".png";
-                        cover.save(filename);
-                        m_cache[key] = cover;
+                        saveCover(gameTitle, systemId, cover);
                         callback(cover);
                     } else {
                         QPixmap placeholder = generatePlaceholderTile(gameTitle, systemId);

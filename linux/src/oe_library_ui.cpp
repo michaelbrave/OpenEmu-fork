@@ -6,6 +6,7 @@
 #include <QIcon>
 #include <QPixmap>
 #include <QPainter>
+#include <QPainterPath>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QLabel>
@@ -23,6 +24,8 @@
 namespace OpenEmu {
 
 static const int TILE_ICON_SIZE = 160;
+/* Custom model role to mark sidebar section header rows */
+static const int kSidebarSectionRole = Qt::UserRole + 2;
 
 struct SystemStyle {
     QColor primary;
@@ -48,24 +51,45 @@ static SystemStyle getSystemStyle(const QString& systemId) {
 
 static QPixmap generateGameTile(const QString& name, const QString& systemId) {
     SystemStyle style = getSystemStyle(systemId);
-    
-    QPixmap pixmap(TILE_ICON_SIZE, TILE_ICON_SIZE);
-    pixmap.fill(Qt::darkGray);
+    const int SIZE = TILE_ICON_SIZE;
+    const int RADIUS = 10;
+
+    QPixmap pixmap(SIZE, SIZE);
+    pixmap.fill(Qt::transparent);
     QPainter p(&pixmap);
-    
-    QLinearGradient gradient(0, 0, 0, TILE_ICON_SIZE);
-    gradient.setColorAt(0, style.primary);
-    gradient.setColorAt(1, style.secondary);
-    p.fillRect(pixmap.rect(), gradient);
-    
-    QRect paddingRect = pixmap.rect().adjusted(12, 12, -12, -12);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    /* Clip to rounded rect */
+    QPainterPath clipPath;
+    clipPath.addRoundedRect(QRectF(0, 0, SIZE, SIZE), RADIUS, RADIUS);
+    p.setClipPath(clipPath);
+
+    /* Main gradient */
+    QLinearGradient bg(0, 0, 0, SIZE);
+    bg.setColorAt(0.0, style.primary);
+    bg.setColorAt(1.0, style.secondary);
+    p.fillRect(0, 0, SIZE, SIZE, bg);
+
+    /* Top sheen highlight */
+    QLinearGradient sheen(0, 0, 0, SIZE * 0.45);
+    sheen.setColorAt(0.0, QColor(255, 255, 255, 55));
+    sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+    p.fillRect(0, 0, SIZE, (int)(SIZE * 0.45), sheen);
+
+    /* Game name */
     p.setPen(Qt::white);
-    p.setFont(QFont("Sans", 10, QFont::Bold));
-    p.drawText(paddingRect, Qt::AlignCenter | Qt::TextWordWrap, name.section('.', 0, 0));
-    
-    p.setPen(QPen(Qt::white, 1));
-    p.drawRect(paddingRect.adjusted(-2, -2, 2, 2));
-    
+    QFont nameFont("Sans", 10, QFont::Bold);
+    p.setFont(nameFont);
+    QString displayName = name.section('.', 0, 0);
+    p.drawText(QRect(10, 10, SIZE - 20, SIZE - 20),
+               Qt::AlignCenter | Qt::TextWordWrap, displayName);
+
+    p.setClipping(false);
+
+    /* Subtle border */
+    p.setPen(QPen(QColor(255, 255, 255, 40), 1.0));
+    p.drawRoundedRect(QRectF(0.5, 0.5, SIZE - 1, SIZE - 1), RADIUS, RADIUS);
+
     p.end();
     return pixmap;
 }
@@ -79,16 +103,18 @@ Sidebar::Sidebar(QWidget* parent)
     , m_db(nullptr)
     , m_model(new QStandardItemModel(this))
 {
+    setObjectName("gameSidebar");
     setModel(m_model);
     setMinimumWidth(SIDEBAR_WIDTH);
     setMaximumWidth(SIDEBAR_WIDTH + 50);
-    setUniformItemSizes(true);
-    
+    setUniformItemSizes(false);
+
     connect(this, &QListView::clicked, this, [this](const QModelIndex& idx) {
-        if (idx.isValid() && onSystemSelected) {
-            QString systemId = idx.data(Qt::UserRole).toString();
-            onSystemSelected(systemId);
-        }
+        if (!idx.isValid() || !onSystemSelected) return;
+        /* Skip section header rows */
+        if (idx.data(kSidebarSectionRole).toBool()) return;
+        QString systemId = idx.data(Qt::UserRole).toString();
+        if (!systemId.isEmpty()) onSystemSelected(systemId);
     });
 }
 
@@ -100,30 +126,49 @@ void Sidebar::setLibraryDatabase(LibraryDatabase* db)
     loadSystems();
 }
 
+static QStandardItem* makeSectionHeader(const QString& label)
+{
+    auto item = new QStandardItem(label);
+    item->setFlags(Qt::ItemIsEnabled); /* visible but not selectable */
+    item->setData(true, kSidebarSectionRole);
+    QFont f = item->font();
+    f.setPointSize(9);
+    f.setWeight(QFont::Medium);
+    item->setFont(f);
+    item->setForeground(QColor("#888888"));
+    return item;
+}
+
 void Sidebar::loadSystems()
 {
     m_model->clear();
-    
+
+    m_model->appendRow(makeSectionHeader("LIBRARY"));
+
     auto allItem = new QStandardItem("All Games");
     allItem->setData("all", Qt::UserRole);
     m_model->appendRow(allItem);
-    
+
     auto recentItem = new QStandardItem("Recent");
     recentItem->setData("recent", Qt::UserRole);
     m_model->appendRow(recentItem);
-    
-    m_model->appendRow(new QStandardItem());
-    
-    if (!m_db) return;
-    
+
+    if (!m_db) {
+        setCurrentIndex(m_model->index(1, 0));
+        return;
+    }
+
+    m_model->appendRow(makeSectionHeader("CONSOLES"));
+
     QSqlQuery query = m_db->execute("SELECT id, name FROM systems ORDER BY name");
     while (query.next()) {
         auto item = new QStandardItem(query.value("name").toString());
         item->setData(query.value("id").toString(), Qt::UserRole);
         m_model->appendRow(item);
     }
-    
-    setCurrentIndex(m_model->index(0, 0));
+
+    /* Select "All Games" (row 1, not the section header at row 0) */
+    setCurrentIndex(m_model->index(1, 0));
 }
 
 QString Sidebar::currentSystemId() const
@@ -131,6 +176,20 @@ QString Sidebar::currentSystemId() const
     QModelIndex idx = currentIndex();
     if (!idx.isValid()) return QString();
     return idx.data(Qt::UserRole).toString();
+}
+
+void Sidebar::selectSystemId(const QString& systemId)
+{
+    for (int row = 0; row < m_model->rowCount(); ++row) {
+        QModelIndex idx = m_model->index(row, 0);
+        if (!idx.isValid()) continue;
+        if (idx.data(kSidebarSectionRole).toBool()) continue;
+        if (idx.data(Qt::UserRole).toString() == systemId) {
+            setCurrentIndex(idx);
+            if (onSystemSelected) onSystemSelected(systemId);
+            return;
+        }
+    }
 }
 
 GameGridView::GameGridView(QWidget* parent)
@@ -163,9 +222,11 @@ void GameGridView::setupUI()
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    
+
+    m_listView->setObjectName("gameGrid");
     m_listView->setViewMode(QListView::IconMode);
-    m_listView->setGridSize(QSize(GRID_ICON_SIZE + 20, GRID_ICON_SIZE + 60));
+    m_listView->setIconSize(QSize(GRID_ICON_SIZE, GRID_ICON_SIZE));
+    m_listView->setGridSize(QSize(GRID_ICON_SIZE + 24, GRID_ICON_SIZE + 52));
     m_listView->setSpacing(GRID_SPACING);
     m_listView->setResizeMode(QListView::Adjust);
     m_listView->setModel(m_model);
@@ -173,13 +234,24 @@ void GameGridView::setupUI()
     m_listView->setDragEnabled(true);
     m_listView->setAcceptDrops(true);
     m_listView->setDropIndicatorShown(true);
-    
+    m_listView->setWordWrap(true);
+    m_listView->setTextElideMode(Qt::ElideMiddle);
+
     layout->addWidget(m_listView);
-    
+
+    /* Single click: notify selection */
     connect(m_listView, &QListView::clicked, this, [this](const QModelIndex& idx) {
         if (idx.isValid() && onGameSelected) {
             int64_t gameId = idx.data(Qt::UserRole).toLongLong();
-            onGameSelected(gameId);
+            if (gameId > 0) onGameSelected(gameId);
+        }
+    });
+
+    /* Double click: launch game */
+    connect(m_listView, &QListView::doubleClicked, this, [this](const QModelIndex& idx) {
+        if (idx.isValid() && onGameSelected) {
+            int64_t gameId = idx.data(Qt::UserRole).toLongLong();
+            if (gameId > 0) onGameSelected(gameId);
         }
     });
 }
@@ -224,9 +296,6 @@ void GameGridView::loadGamesForSystem(const QString& systemId)
     
     QSqlQuery query = m_db->execute(queryStr);
     
-    int row = 0, col = 0;
-    const int cols = 6;
-    
     while (query.next()) {
         int64_t gameId = query.value("id").toLongLong();
         QString name = query.value("title").toString();
@@ -242,7 +311,7 @@ void GameGridView::loadGamesForSystem(const QString& systemId)
         QPixmap placeholder = generateGameTile(name, systemIdentifier);
         item->setIcon(QIcon(placeholder));
         
-        m_model->setItem(row, col, item);
+        m_model->appendRow(item);
         m_gameItems[gameId] = item;
         
         m_coverDownloader->fetchCover(name, systemIdentifier, 
@@ -251,12 +320,6 @@ void GameGridView::loadGamesForSystem(const QString& systemId)
                     item->setIcon(QIcon(cover));
                 }
             });
-        
-        col++;
-        if (col >= cols) {
-            col = 0;
-            row++;
-        }
     }
     
     if (!m_searchFilter.isEmpty()) {
@@ -306,8 +369,8 @@ void GameGridView::showContextMenu(const QPoint& pos)
     QAction* editInfoAction = menu.addAction("Edit Info...");
     editInfoAction->setIcon(QIcon::fromTheme("document-edit"));
     
-    QAction* downloadCoverAction = menu.addAction("Download Cover Art");
-    downloadCoverAction->setIcon(QIcon::fromTheme("download"));
+    QAction* downloadCoverAction = menu.addAction("Set Cover Art...");
+    downloadCoverAction->setIcon(QIcon::fromTheme("image-x-generic"));
     
     menu.addSeparator();
     
@@ -430,7 +493,7 @@ void MainWindow::setupMenuBar()
     connect(openRomAction, &QAction::triggered, this, [this]() {
         QString path = QFileDialog::getOpenFileName(
             this, "Open ROM", QDir::homePath(),
-            "ROM files (*.nes *.snes *.sfc *.gb *.gbc *.gba *.n64 *.z64 *.md *.gen);;All files (*.*)");
+            "ROM files (*.nes *.snes *.sfc *.smc *.gb *.gbc *.gba *.n64 *.z64 *.v64 *.md *.gen *.bin *.nds *.cue *.pbp);;All files (*.*)");
         if (!path.isEmpty() && onRomSelected) {
             onRomSelected(path, QString());
         }
@@ -471,39 +534,49 @@ void MainWindow::setupToolBar()
     QToolBar* toolbar = addToolBar("Main");
     toolbar->setMovable(false);
     toolbar->setFloatable(false);
-    toolbar->setFixedHeight(36);
-    
-    m_importAction = toolbar->addAction("Import");
+    toolbar->setFixedHeight(38);
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+    m_importAction = toolbar->addAction(
+        QIcon::fromTheme("list-add", QIcon::fromTheme("document-open")),
+        "Import ROMs…");
+    m_importAction->setToolTip("Import ROM files into the library");
     connect(m_importAction, &QAction::triggered, this, &MainWindow::onImportROMs);
-    
-    m_preferencesAction = toolbar->addAction("Preferences");
+
+    toolbar->addSeparator();
+
+    m_preferencesAction = toolbar->addAction(
+        QIcon::fromTheme("preferences-system"),
+        "Preferences");
+    m_preferencesAction->setToolTip("Open preferences");
     connect(m_preferencesAction, &QAction::triggered, this, &MainWindow::showPreferences);
 }
 
 void MainWindow::setupHeader()
 {
     m_headerWidget = new QWidget;
-    m_headerWidget->setFixedHeight(60);
+    m_headerWidget->setFixedHeight(56);
     m_headerWidget->setObjectName("libraryHeader");
-    
+
     QHBoxLayout* headerLayout = new QHBoxLayout(m_headerWidget);
     headerLayout->setContentsMargins(16, 8, 16, 8);
-    
+    headerLayout->setSpacing(12);
+
     QLabel* titleLabel = new QLabel("OpenEmu");
     titleLabel->setObjectName("libraryTitle");
     QFont titleFont = titleLabel->font();
-    titleFont.setPointSize(18);
-    titleFont.setBold(true);
+    titleFont.setPointSize(16);
+    titleFont.setWeight(QFont::DemiBold);
     titleLabel->setFont(titleFont);
-    
+
     m_searchBox = new QLineEdit;
-    m_searchBox->setPlaceholderText("Search games...");
-    m_searchBox->setMinimumWidth(250);
+    m_searchBox->setPlaceholderText("Search...");
+    m_searchBox->setFixedWidth(220);
     m_searchBox->setObjectName("searchBox");
     m_searchBox->setClearButtonEnabled(true);
-    
+
     connect(m_searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearch);
-    
+
     headerLayout->addWidget(titleLabel);
     headerLayout->addStretch();
     headerLayout->addWidget(m_searchBox);
@@ -606,49 +679,27 @@ void MainWindow::connectSignals()
         if (!m_db) return;
         
         QSqlQuery query = m_db->execute(
-            QString("SELECT g.title, s.identifier FROM games g "
+            QString("SELECT g.title, s.name as systemName, s.identifier FROM games g "
                     "JOIN systems s ON s.id = g.systemId "
                     "WHERE g.id = %1").arg(gameId));
         
         if (query.next()) {
             QString gameName = query.value("title").toString();
+            QString systemName = query.value("systemName").toString();
             QString systemId = query.value("identifier").toString();
-            
-            QSettings settings("OpenEmu", "Linux");
-            QString apiKey = settings.value("tgdbApiKey").toString();
-            
-            if (apiKey.isEmpty()) {
-                QMessageBox::warning(this, "No API Key",
-                    "Please set your TheGamesDB API key in Preferences.");
+
+            CoverArtDialog dialog(this);
+            dialog.setGameInfo(gameName, systemName);
+            if (dialog.exec() != QDialog::Accepted) {
                 return;
             }
-            
-            statusBar()->showMessage("Searching for cover art: " + gameName);
-            
-            m_gameGrid->gamesApi()->searchGame(gameName, systemId,
-                [this, gameId, gameName](const GameInfo& info) {
-                    if (info.boxArtUrl.isEmpty()) {
-                        statusBar()->showMessage("No cover art found for: " + gameName);
-                        return;
-                    }
-                    
-                    m_gameGrid->gamesApi()->fetchBoxArt(info.boxArtUrl, gameName,
-                        [this, gameId, info](const QPixmap& pixmap) {
-                            if (!pixmap.isNull()) {
-                                QString cachePath = QDir::home().filePath(
-                                    ".local/share/openemu/covers");
-                                QDir().mkpath(cachePath);
-                                QString coverPath = cachePath + "/" +
-                                    QString::number(gameId) + ".png";
-                                pixmap.save(coverPath);
-                                
-                                statusBar()->showMessage("Cover art downloaded: " + info.title);
-                                m_gameGrid->loadGamesForSystem(m_sidebar->currentSystemId());
-                            } else {
-                                statusBar()->showMessage("Failed to download cover art");
-                            }
-                        });
-                });
+
+            if (m_gameGrid->coverDownloader()->saveCover(gameName, systemId, dialog.selectedCover())) {
+                statusBar()->showMessage("Cover art updated: " + gameName);
+                m_gameGrid->loadGamesForSystem(m_sidebar->currentSystemId());
+            } else {
+                statusBar()->showMessage("Failed to save cover art");
+            }
         }
     };
 }
@@ -672,7 +723,7 @@ void MainWindow::onImportROMs()
         this,
         "Import ROMs",
         QDir::homePath(),
-        "ROM files (*.nes *.snes *.sfc *.gb *.gbc *.gba *.n64 *.z64 *.md *.gen);;All files (*.*)"
+        "ROM files (*.nes *.snes *.sfc *.smc *.gb *.gbc *.gba *.n64 *.z64 *.v64 *.md *.gen *.bin *.nds *.cue *.pbp);;All files (*.*)"
     );
     
     qDebug() << "Selected files:" << paths;
@@ -681,7 +732,7 @@ void MainWindow::onImportROMs()
         for (const QString& path : paths) {
             importROM(path);
         }
-        m_gameGrid->loadGamesForSystem(m_sidebar->currentSystemId());
+        m_sidebar->selectSystemId("all");
     }
 }
 
@@ -734,7 +785,7 @@ void MainWindow::dropEvent(QDropEvent* event)
         for (const QString& path : paths) {
             importROM(path);
         }
-        m_gameGrid->loadGamesForSystem(m_sidebar->currentSystemId());
+        m_sidebar->selectSystemId("all");
     }
 }
 
@@ -796,109 +847,194 @@ void MainWindow::importROM(const QString& path)
 void MainWindow::applyStyleSheet()
 {
     setStyleSheet(R"(
-        QMainWindow {
-            background-color: #1a1a2e;
+        /* === Base === */
+        QMainWindow, QWidget {
+            background-color: #1c1c1e;
+            color: #f0f0f0;
+            font-size: 13px;
         }
+
+        /* === Header === */
         QWidget#libraryHeader {
-            background-color: #16213e;
-            border-bottom: 1px solid #0f3460;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                         stop:0 #3a3a3c, stop:1 #2c2c2e);
+            border-bottom: 1px solid #404040;
         }
         QLabel#libraryTitle {
-            color: #e94560;
+            color: #f0f0f0;
+            font-size: 16px;
+            font-weight: 600;
         }
+
+        /* === Search box === */
         QLineEdit#searchBox {
-            background-color: #0f3460;
-            color: #eaeaea;
-            border: 1px solid #0f3460;
-            border-radius: 16px;
-            padding: 6px 16px;
-            font-size: 14px;
+            background-color: #3a3a3c;
+            color: #f0f0f0;
+            border: 1px solid #555555;
+            border-radius: 13px;
+            padding: 4px 14px;
+            font-size: 13px;
+            selection-background-color: #0a84ff;
         }
         QLineEdit#searchBox:focus {
-            border: 1px solid #e94560;
+            border: 1px solid #0a84ff;
+            background-color: #444446;
         }
-        QLineEdit#searchBox::placeholder {
-            color: #888;
-        }
+
+        /* === Toolbar === */
         QToolBar {
-            background-color: #1a1a2e;
-            border: none;
-            padding: 4px 8px;
-        }
-        QToolBar QLabel {
-            color: #eaeaea;
+            background-color: #2c2c2e;
+            border-bottom: 1px solid #404040;
+            spacing: 6px;
+            padding: 3px 10px;
         }
         QToolButton {
-            background-color: #0f3460;
-            color: #eaeaea;
-            border: none;
-            border-radius: 4px;
-            padding: 6px 12px;
+            background-color: #3a3a3c;
+            color: #f0f0f0;
+            border: 1px solid #555555;
+            border-radius: 5px;
+            padding: 4px 12px;
+            font-size: 13px;
         }
         QToolButton:hover {
-            background-color: #e94560;
+            background-color: #4a4a4c;
+            border-color: #777777;
+        }
+        QToolButton:pressed {
+            background-color: #222224;
         }
         QToolBar::separator {
-            background-color: #0f3460;
+            background-color: #444444;
             width: 1px;
-            margin: 4px 8px;
+            margin: 4px 6px;
         }
+
+        /* === Menu bar === */
         QMenuBar {
-            background-color: #16213e;
-            color: #eaeaea;
-            border-bottom: 1px solid #0f3460;
+            background-color: #2c2c2e;
+            color: #f0f0f0;
+            border-bottom: 1px solid #404040;
+        }
+        QMenuBar::item {
+            padding: 4px 10px;
         }
         QMenuBar::item:selected {
-            background-color: #0f3460;
+            background-color: #3a3a3c;
+            border-radius: 4px;
         }
         QMenu {
-            background-color: #16213e;
-            color: #eaeaea;
-            border: 1px solid #0f3460;
+            background-color: #2c2c2e;
+            color: #f0f0f0;
+            border: 1px solid #505050;
+            border-radius: 6px;
+        }
+        QMenu::item {
+            padding: 5px 20px;
         }
         QMenu::item:selected {
-            background-color: #0f3460;
+            background-color: #0a84ff;
+            color: #ffffff;
+            border-radius: 4px;
         }
+        QMenu::separator {
+            height: 1px;
+            background: #404040;
+            margin: 3px 8px;
+        }
+
+        /* === Status bar === */
         QStatusBar {
-            background-color: #16213e;
-            color: #aaa;
+            background-color: #2c2c2e;
+            color: #ababab;
+            border-top: 1px solid #404040;
         }
-        QListView {
-            background-color: #1a1a2e;
+
+        /* === Splitter === */
+        QSplitter::handle {
+            background-color: #383838;
+        }
+        QSplitter::handle:horizontal {
+            width: 1px;
+        }
+
+        /* === Sidebar (Sidebar is itself a QListView) === */
+        QListView#gameSidebar {
+            background-color: #252527;
+            color: #d0d0d0;
+            border: none;
+            outline: none;
+            font-size: 13px;
+        }
+        QListView#gameSidebar::item {
+            border-radius: 5px;
+            padding: 5px 8px;
+            margin: 1px 6px;
+        }
+        QListView#gameSidebar::item:selected {
+            background-color: #0a84ff;
+            color: #ffffff;
+        }
+        QListView#gameSidebar::item:hover:!selected {
+            background-color: #333335;
+        }
+
+        /* === Game grid === */
+        QListView#gameGrid {
+            background-color: #1c1c1e;
+            color: #f0f0f0;
             border: none;
             outline: none;
         }
-        QListView::item {
-            background-color: transparent;
+        QListView#gameGrid::item {
             border-radius: 8px;
-            padding: 4px;
+            padding: 6px;
+            margin: 4px;
+            color: #d8d8d8;
+            font-size: 12px;
         }
-        QListView::item:selected {
-            background-color: #e94560;
-            border: 2px solid #ff6b8a;
+        QListView#gameGrid::item:selected {
+            background-color: rgba(10, 132, 255, 0.25);
+            color: #ffffff;
         }
-        QListView::item:hover:!selected {
-            background-color: #2a2a4e;
-            border: 1px solid #3a3a5e;
+        QListView#gameGrid::item:hover:!selected {
+            background-color: rgba(255, 255, 255, 0.06);
         }
+
+        /* === Scroll bars === */
         QScrollBar:vertical {
-            background-color: #1a1a2e;
-            width: 10px;
-            margin: 0;
+            background-color: transparent;
+            width: 8px;
+            margin: 2px;
         }
         QScrollBar::handle:vertical {
-            background-color: #0f3460;
-            border-radius: 5px;
-            min-height: 30px;
+            background-color: #555557;
+            border-radius: 4px;
+            min-height: 24px;
         }
         QScrollBar::handle:vertical:hover {
-            background-color: #e94560;
+            background-color: #777779;
         }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             height: 0;
         }
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
             background: none;
+        }
+        QScrollBar:horizontal {
+            background-color: transparent;
+            height: 8px;
+            margin: 2px;
+        }
+        QScrollBar::handle:horizontal {
+            background-color: #555557;
+            border-radius: 4px;
+            min-width: 24px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background-color: #777779;
+        }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0;
         }
     )");
 }

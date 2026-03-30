@@ -22,6 +22,8 @@ public:
     QPixmap getCachedCover(const QString& gameTitle, const QString& systemId);
     
     void setCacheDirectory(const QString& path);
+    QString cacheFilePath(const QString& gameTitle, const QString& systemId) const;
+    bool saveCover(const QString& gameTitle, const QString& systemId, const QPixmap& pixmap);
     
     void setGamesDatabaseApi(GamesDatabaseApi* api);
     void setApiKey(const QString& key);

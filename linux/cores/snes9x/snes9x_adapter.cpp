@@ -5,8 +5,8 @@
  * Calls the SNES9x C++ API directly, bypassing the macOS ObjC wrapper
  * (SNES9x/SNESGameCore.mm).
  *
- * Video output: RGB565 (2 bytes/pixel), MAX_SNES_WIDTH × MAX_SNES_HEIGHT.
- * The actual rendered region is typically 256×224 or 512×224 for hi-res.
+ * Video output: SNES9x renders into RGB565 internally; this adapter converts
+ * to RGBA8888 for the Linux frontend upload path.
  */
 
 #include "oe_core_interface.h"
@@ -33,13 +33,19 @@
 #define SIZESOUNDBUFFER (SAMPLERATE / 10 * 2)
 
 struct OECoreState {
-    uint16_t *video_buffer;    /* GFX.Screen points here */
-    int16_t  *sound_buffer;    /* circular audio buffer */
+    /*
+     * video_buffer removed: S9xGraphicsInit() overwrites GFX.Screen with a
+     * pointer into its own internal ScreenBuffer, so any assignment we made
+     * before init was silently discarded.  We now read directly from GFX.Screen
+     * after each frame instead of maintaining a separate copy.
+     */
+    uint32_t *rgba_buffer;      /* RGBA8888 upload buffer */
+    int16_t  *sound_buffer;     /* circular audio buffer */
     size_t    sound_head;
     size_t    sound_tail;
     size_t    sound_count;
-    int       render_width;    /* actual rendered width this frame */
-    int       render_height;   /* actual rendered height this frame */
+    int       render_width;     /* actual rendered width this frame */
+    int       render_height;    /* actual rendered height this frame */
 };
 
 /* -----------------------------------------------------------------------
@@ -50,15 +56,23 @@ static void samples_available_callback(void *context)
     OECoreState *state = (OECoreState *)context;
     if (!state || !state->sound_buffer) return;
 
-    size_t avail = SIZESOUNDBUFFER - state->sound_count;
-    if (avail == 0) return;
+    /*
+     * S9xMixSamples returns FALSE and fills zeros if you ask for more
+     * int16_t samples than the resampler holds.  At 32040 Hz / 60 fps only
+     * ~1068 samples exist per callback.  Ask for exactly what is ready.
+     */
+    int available = S9xGetSampleCount();
+    if (available <= 0) return;
 
-    size_t to_read = avail;
-    if (to_read > 2048) to_read = 2048;
+    size_t space = SIZESOUNDBUFFER - state->sound_count;
+    if (space == 0) return;
+
+    size_t to_read = (size_t)available;
+    if (to_read > space)   to_read = space;
+    if (to_read > 2048)    to_read = 2048;
 
     int16_t tmp[2048];
-    /* S9xMixSamples takes the number of int16_t samples to write */
-    S9xMixSamples((uint8_t *)tmp, (int)to_read);
+    if (!S9xMixSamples((uint8_t *)tmp, (int)to_read)) return;
 
     for (size_t i = 0; i < to_read; i++) {
         state->sound_buffer[state->sound_head] = tmp[i];
@@ -101,17 +115,17 @@ static OECoreState *snes_create(void)
     OECoreState *state = (OECoreState *)calloc(1, sizeof(OECoreState));
     if (!state) return NULL;
 
-    state->video_buffer = (uint16_t *)malloc(MAX_SNES_WIDTH * MAX_SNES_HEIGHT * sizeof(uint16_t));
-    state->sound_buffer = (int16_t *)malloc(SIZESOUNDBUFFER * sizeof(int16_t));
+    state->rgba_buffer  = (uint32_t *)malloc(MAX_SNES_WIDTH * MAX_SNES_HEIGHT * sizeof(uint32_t));
+    state->sound_buffer = (int16_t  *)malloc(SIZESOUNDBUFFER * sizeof(int16_t));
 
-    if (!state->video_buffer || !state->sound_buffer) {
-        free(state->video_buffer);
+    if (!state->rgba_buffer || !state->sound_buffer) {
+        free(state->rgba_buffer);
         free(state->sound_buffer);
         free(state);
         return NULL;
     }
 
-    memset(state->video_buffer, 0, MAX_SNES_WIDTH * MAX_SNES_HEIGHT * sizeof(uint16_t));
+    memset(state->rgba_buffer, 0, MAX_SNES_WIDTH * MAX_SNES_HEIGHT * sizeof(uint32_t));
     state->render_width  = 256;
     state->render_height = 224;
     return state;
@@ -124,12 +138,17 @@ static void snes_destroy(OECoreState *state)
     S9xDeinitAPU();
     S9xGraphicsDeinit();
     Memory.Deinit();
-    free(state->video_buffer);
+    free(state->rgba_buffer);
     free(state->sound_buffer);
     free(state);
 }
 
-static const char *SNESEmulatorKeys[] = { "Up", "Down", "Left", "Right", "A", "B", "X", "Y", "L", "R", "Start", "Select", NULL };
+/*
+ * SDL abstract buttons vs SNES physical positions:
+ *   SDL A (bottom) = SNES B,  SDL B (right) = SNES A
+ *   SDL X (left)   = SNES Y,  SDL Y (top)   = SNES X
+ */
+static const char *SNESEmulatorKeys[] = { "Up", "Down", "Left", "Right", "B", "A", "Y", "X", "L", "R", "Start", "Select", NULL };
 
 static int snes_load_rom(OECoreState *state, const char *path)
 {
@@ -161,8 +180,6 @@ static int snes_load_rom(OECoreState *state, const char *path)
     Settings.HDMATimingHack           = 100;
     Settings.MaxSpriteTilesPerLine    = 34;
 
-    GFX.Screen = state->video_buffer;
-
     S9xUnmapAllControls();
     S9xSetController(0, CTL_JOYPAD, 0, 0, 0, 0);
     S9xSetController(1, CTL_JOYPAD, 1, 0, 0, 0);
@@ -182,6 +199,12 @@ static int snes_load_rom(OECoreState *state, const char *path)
     }
 
     if (!Memory.Init() || !S9xInitAPU() || !S9xGraphicsInit()) return -1;
+    /*
+     * GFX.Screen must be set AFTER S9xGraphicsInit — that function allocates
+     * its own internal ScreenBuffer and points GFX.Screen into it, overwriting
+     * anything set before.  We leave GFX.Screen pointing at the internal buffer
+     * and read pixels from it directly in snes_run_frame.
+     */
     if (!S9xInitSound(100)) {}
 
     S9xSetSamplesAvailableCallback(samples_available_callback, state);
@@ -199,6 +222,23 @@ static void snes_run_frame(OECoreState *state)
     state->render_height = IPPU.RenderedScreenHeight;
     if (state->render_width  == 0) state->render_width  = 256;
     if (state->render_height == 0) state->render_height = 224;
+
+    /*
+     * Read directly from GFX.Screen (SNES9x's internal buffer).
+     * GFX.RealPPL is the true row stride in uint16 units (= MAX_SNES_WIDTH = 512),
+     * regardless of the current render width.
+     */
+    const int stride = (int)GFX.RealPPL;
+    for (int y = 0; y < state->render_height; ++y) {
+        for (int x = 0; x < state->render_width; ++x) {
+            const uint16_t pixel = GFX.Screen[y * stride + x];
+            const uint8_t r = ((pixel >> 11) & 0x1F) * 255 / 31;
+            const uint8_t g = ((pixel >> 5)  & 0x3F) * 255 / 63;
+            const uint8_t b = ( pixel        & 0x1F) * 255 / 31;
+            state->rgba_buffer[y * state->render_width + x] =
+                (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xFF000000u;
+        }
+    }
 }
 
 static void snes_reset(OECoreState *state)
@@ -241,12 +281,12 @@ static void snes_get_video_size(OECoreState *state, int *width, int *height)
 static OEPixelFormat snes_get_pixel_format(OECoreState *state)
 {
     (void)state;
-    return OE_PIXEL_RGB565;
+    return OE_PIXEL_RGBA8888;
 }
 
 static const void *snes_get_video_buffer(OECoreState *state)
 {
-    return state->video_buffer;
+    return state->rgba_buffer;
 }
 
 static int snes_get_audio_sample_rate(OECoreState *state)

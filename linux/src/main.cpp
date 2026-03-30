@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QDebug>
 #include <QVBoxLayout>
+#include <QSettings>
 #include <iostream>
 #include <memory>
 #include <cstdlib>
@@ -146,6 +147,23 @@ private:
     void setupInput()
     {
         m_input = new OpenEmu::InputBackend();
+
+        /* Apply any custom mappings saved by the controller mapping dialog. */
+        {
+            QSettings s(QStringLiteral("OpenEmu"), QStringLiteral("Linux"));
+            s.beginGroup(QStringLiteral("controls"));
+            if (s.contains(QStringLiteral("key_0"))) {
+                int keys[OpenEmu::OE_NUM_BUTTONS];
+                int btns[OpenEmu::OE_NUM_BUTTONS];
+                for (int i = 0; i < OpenEmu::OE_NUM_BUTTONS; i++) {
+                    keys[i] = s.value(QString("key_%1").arg(i), -1).toInt();
+                    btns[i] = s.value(QString("btn_%1").arg(i), -1).toInt();
+                }
+                m_input->setCustomMappings(keys, btns);
+            }
+            s.endGroup();
+        }
+
         m_input->setButtonCallback([this](int player, int button, OpenEmu::InputEvent event) {
             if (m_core) {
                 m_core->setButton(player, button, event == OpenEmu::InputEvent::Press);

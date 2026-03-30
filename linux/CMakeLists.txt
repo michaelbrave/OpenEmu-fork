@@ -84,8 +84,11 @@ qt_add_executable(openemu-linux
     src/oe_game_loop.cpp
     src/oe_library_ui.cpp
     src/oe_cover_art.cpp
+    src/oe_cover_art_dialog.cpp
     src/oe_games_api.cpp
     src/oe_preferences_dialog.cpp
+    src/oe_controller_mapping_dialog.cpp
+    include/oe_controller_mapping_dialog.h
     src/oe_edit_game_info_dialog.cpp
 )
 target_link_libraries(openemu-linux PRIVATE oe_core_bridge Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network)

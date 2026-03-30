@@ -10,6 +10,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QStringList>
+#include <QLabel>
 
 namespace OpenEmu {
 
@@ -35,22 +36,22 @@ private:
     void saveSettings();
 
     QTabWidget* m_tabs;
-    
+
     QListWidget* m_pathsList;
     QPushButton* m_addPathBtn;
     QPushButton* m_removePathBtn;
-    
+
     QLineEdit* m_apiKeyEdit;
     QPushButton* m_clearCacheBtn;
-    
+
     QSpinBox* m_frameskipBox;
     QSpinBox* m_sampleRateBox;
     QLineEdit* m_shaderEdit;
     QPushButton* m_browseShaderBtn;
     QCheckBox* m_vsyncCheck;
-    
-    QListWidget* m_controllerList;
-    QComboBox* m_controllerCombo;
+
+    QLabel* m_mappingSummaryLabel;
+    QPushButton* m_configureMappingBtn;
 };
 
 } // namespace OpenEmu
