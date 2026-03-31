@@ -20,7 +20,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 add_library(oe_core_bridge STATIC
-    src/oe_core_bridge.cpp
+    src/oe_core_ipc_bridge.cpp
     src/oe_library_database.cpp
     src/oe_audio_backend.cpp
     src/oe_input_backend.cpp
@@ -67,6 +67,11 @@ if (OE_BUILD_FCEU)
     add_subdirectory(cores/fceu)
 endif()
 
+add_executable(oe_core_host
+    src/oe_core_host.cpp
+)
+target_link_libraries(oe_core_host PRIVATE ${CMAKE_DL_LIBS})
+
 add_subdirectory(test)
 
 add_executable(qt_test test/qt_test.cpp)
@@ -90,5 +95,11 @@ qt_add_executable(openemu-linux
     src/oe_controller_mapping_dialog.cpp
     include/oe_controller_mapping_dialog.h
     src/oe_edit_game_info_dialog.cpp
+    src/oe_save_state_dialog.cpp
+    include/oe_save_state_dialog.h
+    src/oe_achievements.cpp
+    include/oe_achievements.h
+    src/oe_netplay.cpp
+    include/oe_netplay.h
 )
 target_link_libraries(openemu-linux PRIVATE oe_core_bridge Qt6::Widgets Qt6::OpenGLWidgets Qt6::Network)

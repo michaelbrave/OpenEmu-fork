@@ -8,12 +8,15 @@
 
 namespace OpenEmu {
 
+class CoreBridgeImpl;
+
 class CoreBridge {
 public:
     CoreBridge(const std::string& libraryPath);
     ~CoreBridge();
 
     bool loadROM(const std::string& path);
+    void setSaveDirectory(const std::string& path);
     void runFrame();
     void reset();
 
@@ -21,7 +24,7 @@ public:
     bool loadState(const std::string& path);
 
     void setButton(int player, int button, bool pressed);
-    
+
     struct VideoSize {
         int width;
         int height;
@@ -32,11 +35,10 @@ public:
 
     int audioSampleRate() const;
     size_t readAudio(int16_t* buffer, size_t maxSamples);
+    bool isRunning() const;
 
 private:
-    void* m_handle;
-    const OECoreInterface* m_interface;
-    OECoreState* m_state;
+    std::shared_ptr<CoreBridgeImpl> m_impl;
 };
 
 } // namespace OpenEmu

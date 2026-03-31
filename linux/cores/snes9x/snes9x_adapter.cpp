@@ -22,6 +22,8 @@
 #include "snapshot.h"
 #include "cheats.h"
 
+void S9xSetSaveDirectory(const char* path);
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -141,6 +143,16 @@ static void snes_destroy(OECoreState *state)
     free(state->rgba_buffer);
     free(state->sound_buffer);
     free(state);
+}
+
+static char g_save_directory[512] = "/tmp/openemu_snes9x";
+
+static void snes_set_save_directory(OECoreState *state, const char *path)
+{
+    if (path) {
+        snprintf(g_save_directory, sizeof(g_save_directory), "%s", path);
+        S9xSetSaveDirectory(g_save_directory);
+    }
 }
 
 /*
@@ -311,6 +323,7 @@ static size_t snes_read_audio(OECoreState *state, int16_t *buffer, size_t max_sa
 static const OECoreInterface snes_interface = {
     snes_create,
     snes_destroy,
+    snes_set_save_directory,
     snes_load_rom,
     snes_run_frame,
     snes_reset,

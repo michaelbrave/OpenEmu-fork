@@ -1,6 +1,7 @@
 #include "oe_library_ui.h"
 #include "oe_preferences_dialog.h"
 #include "oe_edit_game_info_dialog.h"
+#include "oe_games_api.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -49,7 +50,7 @@ static SystemStyle getSystemStyle(const QString& systemId) {
     return {QColor("#0f3460"), QColor("#16213e")};
 }
 
-static QPixmap generateGameTile(const QString& name, const QString& systemId) {
+static QPixmap generateGameTile(const QString& name, const QString& systemId, const QPixmap* coverArt = nullptr) {
     SystemStyle style = getSystemStyle(systemId);
     const int SIZE = TILE_ICON_SIZE;
     const int RADIUS = 10;
@@ -64,25 +65,33 @@ static QPixmap generateGameTile(const QString& name, const QString& systemId) {
     clipPath.addRoundedRect(QRectF(0, 0, SIZE, SIZE), RADIUS, RADIUS);
     p.setClipPath(clipPath);
 
-    /* Main gradient */
-    QLinearGradient bg(0, 0, 0, SIZE);
-    bg.setColorAt(0.0, style.primary);
-    bg.setColorAt(1.0, style.secondary);
-    p.fillRect(0, 0, SIZE, SIZE, bg);
+    if (coverArt && !coverArt->isNull()) {
+        QPixmap scaled = coverArt->scaled(SIZE, SIZE, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        
+        int x = (SIZE - scaled.width()) / 2;
+        int y = (SIZE - scaled.height()) / 2;
+        p.drawPixmap(x, y, scaled);
+    } else {
+        /* Main gradient */
+        QLinearGradient bg(0, 0, 0, SIZE);
+        bg.setColorAt(0.0, style.primary);
+        bg.setColorAt(1.0, style.secondary);
+        p.fillRect(0, 0, SIZE, SIZE, bg);
 
-    /* Top sheen highlight */
-    QLinearGradient sheen(0, 0, 0, SIZE * 0.45);
-    sheen.setColorAt(0.0, QColor(255, 255, 255, 55));
-    sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
-    p.fillRect(0, 0, SIZE, (int)(SIZE * 0.45), sheen);
+        /* Top sheen highlight */
+        QLinearGradient sheen(0, 0, 0, SIZE * 0.45);
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 55));
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+        p.fillRect(0, 0, SIZE, (int)(SIZE * 0.45), sheen);
 
-    /* Game name */
-    p.setPen(Qt::white);
-    QFont nameFont("Sans", 10, QFont::Bold);
-    p.setFont(nameFont);
-    QString displayName = name.section('.', 0, 0);
-    p.drawText(QRect(10, 10, SIZE - 20, SIZE - 20),
-               Qt::AlignCenter | Qt::TextWordWrap, displayName);
+        /* Game name */
+        p.setPen(Qt::white);
+        QFont nameFont("Sans", 10, QFont::Bold);
+        p.setFont(nameFont);
+        QString displayName = name.section('.', 0, 0);
+        p.drawText(QRect(10, 10, SIZE - 20, SIZE - 20),
+                   Qt::AlignCenter | Qt::TextWordWrap, displayName);
+    }
 
     p.setClipping(false);
 
@@ -200,6 +209,7 @@ GameGridView::GameGridView(QWidget* parent)
     , m_gamesApi(new GamesDatabaseApi(this))
     , m_coverDownloader(new CoverArtDownloader(this))
     , m_contextMenuGameId(0)
+    , m_viewMode(1)
 {
     m_coverDownloader->setGamesDatabaseApi(m_gamesApi);
     
@@ -239,21 +249,41 @@ void GameGridView::setupUI()
 
     layout->addWidget(m_listView);
 
-    /* Single click: notify selection */
-    connect(m_listView, &QListView::clicked, this, [this](const QModelIndex& idx) {
-        if (idx.isValid() && onGameSelected) {
-            int64_t gameId = idx.data(Qt::UserRole).toLongLong();
-            if (gameId > 0) onGameSelected(gameId);
-        }
-    });
-
-    /* Double click: launch game */
+    /* Double click: launch game. Single click should only select. */
     connect(m_listView, &QListView::doubleClicked, this, [this](const QModelIndex& idx) {
         if (idx.isValid() && onGameSelected) {
             int64_t gameId = idx.data(Qt::UserRole).toLongLong();
             if (gameId > 0) onGameSelected(gameId);
         }
     });
+
+    QSettings settings("OpenEmu", "Linux");
+    m_viewMode = settings.value("viewMode", 1).toInt();
+    setViewMode(m_viewMode);
+}
+
+void GameGridView::setViewMode(int mode)
+{
+    m_viewMode = mode;
+    QSettings settings("OpenEmu", "Linux");
+    settings.setValue("viewMode", mode);
+
+    if (mode == 0) {
+        m_listView->setViewMode(QListView::ListMode);
+        m_listView->setIconSize(QSize(32, 32));
+        m_listView->setGridSize(QSize(-1, 40));
+        m_listView->setSpacing(2);
+    } else if (mode == 1) {
+        m_listView->setViewMode(QListView::IconMode);
+        m_listView->setIconSize(QSize(GRID_ICON_SIZE, GRID_ICON_SIZE));
+        m_listView->setGridSize(QSize(GRID_ICON_SIZE + 24, GRID_ICON_SIZE + 52));
+        m_listView->setSpacing(GRID_SPACING);
+    } else if (mode == 2) {
+        m_listView->setViewMode(QListView::IconMode);
+        m_listView->setIconSize(QSize(GRID_ICON_SIZE * 2, GRID_ICON_SIZE * 2));
+        m_listView->setGridSize(QSize(GRID_ICON_SIZE * 2 + 40, GRID_ICON_SIZE * 2 + 80));
+        m_listView->setSpacing(GRID_SPACING * 2);
+    }
 }
 
 void GameGridView::setLibraryDatabase(LibraryDatabase* db)
@@ -317,7 +347,8 @@ void GameGridView::loadGamesForSystem(const QString& systemId)
         m_coverDownloader->fetchCover(name, systemIdentifier, 
             [item, name, systemIdentifier](const QPixmap& cover) {
                 if (!cover.isNull()) {
-                    item->setIcon(QIcon(cover));
+                    QPixmap tile = generateGameTile(name, systemIdentifier, &cover);
+                    item->setIcon(QIcon(tile));
                 }
             });
     }
@@ -372,6 +403,9 @@ void GameGridView::showContextMenu(const QPoint& pos)
     QAction* downloadCoverAction = menu.addAction("Set Cover Art...");
     downloadCoverAction->setIcon(QIcon::fromTheme("image-x-generic"));
     
+    QAction* updateFromApiAction = menu.addAction("Update from API");
+    updateFromApiAction->setIcon(QIcon::fromTheme("view-refresh"));
+    
     menu.addSeparator();
     
     QAction* showInFolderAction = menu.addAction("Show in File Manager");
@@ -381,7 +415,6 @@ void GameGridView::showContextMenu(const QPoint& pos)
     
     QAction* deleteAction = menu.addAction("Delete from Library");
     deleteAction->setIcon(QIcon::fromTheme("edit-delete"));
-    deleteAction->setEnabled(false);
     
     QAction* selected = menu.exec(m_listView->mapToGlobal(pos));
     
@@ -398,6 +431,15 @@ void GameGridView::showContextMenu(const QPoint& pos)
     } else if (selected == downloadCoverAction) {
         if (onDownloadCoverArt) {
             onDownloadCoverArt(gameId);
+        }
+    } else if (selected == updateFromApiAction) {
+        if (onUpdateFromApi) {
+            onUpdateFromApi(gameId);
+        }
+    } else if (selected == deleteAction) {
+        if (m_db) {
+            m_db->deleteGame(gameId);
+            loadGamesForSystem(m_currentSystemId);
         }
     } else if (selected == showInFolderAction) {
         if (m_db) {
@@ -545,6 +587,26 @@ void MainWindow::setupToolBar()
 
     toolbar->addSeparator();
 
+    QAction* listViewAction = toolbar->addAction(QIcon::fromTheme("view-list"), "List");
+    listViewAction->setToolTip("List view");
+    connect(listViewAction, &QAction::triggered, this, [this]() {
+        m_gameGrid->setViewMode(0);
+    });
+
+    QAction* gridViewAction = toolbar->addAction(QIcon::fromTheme("view-grid"), "Grid");
+    gridViewAction->setToolTip("Grid view");
+    connect(gridViewAction, &QAction::triggered, this, [this]() {
+        m_gameGrid->setViewMode(1);
+    });
+
+    QAction* largeViewAction = toolbar->addAction(QIcon::fromTheme("view-fullscreen"), "Large");
+    largeViewAction->setToolTip("Large icons view");
+    connect(largeViewAction, &QAction::triggered, this, [this]() {
+        m_gameGrid->setViewMode(2);
+    });
+
+    toolbar->addSeparator();
+
     m_preferencesAction = toolbar->addAction(
         QIcon::fromTheme("preferences-system"),
         "Preferences");
@@ -631,7 +693,9 @@ void MainWindow::connectSignals()
         if (!m_db) return;
         
         QSqlQuery query = m_db->execute(
-            QString("SELECT g.title, s.name as systemName, s.identifier, r.path FROM games g "
+            QString("SELECT g.title, s.name as systemName, s.identifier, r.path, "
+                    "g.releaseDate, g.developer, g.publisher, g.genre, g.description "
+                    "FROM games g "
                     "JOIN systems s ON s.id = g.systemId "
                     "JOIN roms r ON r.gameId = g.id "
                     "WHERE g.id = %1").arg(gameId));
@@ -641,9 +705,14 @@ void MainWindow::connectSignals()
             QString system = query.value("systemName").toString();
             QString systemId = query.value("identifier").toString();
             QString path = query.value("path").toString();
+            QString releaseDate = query.value("releaseDate").toString();
+            QString developer = query.value("developer").toString();
+            QString publisher = query.value("publisher").toString();
+            QString genre = query.value("genre").toString();
+            QString description = query.value("description").toString();
             
             EditGameInfoDialog dialog(this);
-            dialog.setGameInfo(title, systemId, path);
+            dialog.setGameInfo(title, systemId, path, releaseDate, developer, publisher, genre, description);
             
             if (dialog.exec() == QDialog::Accepted) {
                 QString newTitle = dialog.editedTitle();
@@ -670,6 +739,13 @@ void MainWindow::connectSignals()
                     }
                 }
                 
+                m_db->updateGameInfo(gameId, 
+                    dialog.editedReleaseDate(),
+                    dialog.editedDeveloper(),
+                    dialog.editedPublisher(),
+                    dialog.editedGenre(),
+                    dialog.editedDescription());
+                
                 m_gameGrid->loadGamesForSystem(m_sidebar->currentSystemId());
             }
         }
@@ -689,7 +765,8 @@ void MainWindow::connectSignals()
             QString systemId = query.value("identifier").toString();
 
             CoverArtDialog dialog(this);
-            dialog.setGameInfo(gameName, systemName);
+            dialog.setGameInfo(gameName, systemName, systemId);
+            dialog.setGamesApi(m_gameGrid->gamesApi());
             if (dialog.exec() != QDialog::Accepted) {
                 return;
             }
@@ -700,6 +777,48 @@ void MainWindow::connectSignals()
             } else {
                 statusBar()->showMessage("Failed to save cover art");
             }
+        }
+    };
+    
+    m_gameGrid->onUpdateFromApi = [this](int64_t gameId) {
+        if (!m_db) return;
+        
+        QSqlQuery query = m_db->execute(
+            QString("SELECT g.title, s.identifier FROM games g "
+                    "JOIN systems s ON s.id = g.systemId "
+                    "WHERE g.id = %1").arg(gameId));
+        
+        if (query.next()) {
+            QString title = query.value("title").toString();
+            QString systemId = query.value("identifier").toString();
+
+            m_gameGrid->gamesApi()->searchGame(title, systemId, [this, gameId, title, systemId](const GameInfo& info) {
+                if (info.id <= 0) {
+                    statusBar()->showMessage("No API results found for: " + title);
+                    return;
+                }
+                
+                m_db->updateGameInfo(gameId, 
+                    info.releaseDate,
+                    info.developer,
+                    info.publisher,
+                    info.genre,
+                    info.description,
+                    info.tgdbId);
+                
+                if (!info.boxArtUrl.isEmpty()) {
+                    m_gameGrid->gamesApi()->fetchBoxArt(info.boxArtUrl, title, [this, gameId, title, systemId](const QPixmap& cover) {
+                        if (!cover.isNull()) {
+                            m_gameGrid->coverDownloader()->saveCover(title, systemId, cover);
+                        }
+                        m_gameGrid->loadGamesForSystem(m_sidebar->currentSystemId());
+                        statusBar()->showMessage("Updated from API: " + title);
+                    });
+                } else {
+                    m_gameGrid->loadGamesForSystem(m_sidebar->currentSystemId());
+                    statusBar()->showMessage("Updated from API: " + title);
+                }
+            });
         }
     };
 }
